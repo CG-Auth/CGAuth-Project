@@ -129,18 +129,24 @@ Works natively in all modern browsers (Chrome, Edge, Firefox, Safari) and Node.j
 
 | Error Code | Description |
 |-------------|-------------|
-| `INVALID_API_KEY` | Your API key is invalid or not recognized. |
-| `INVALID_LICENSE` | The license key is invalid, expired, or not found. |
-| `INVALID_USER` | Username or password is incorrect. |
-| `HWID_MISMATCH` | License is tied to a different device/browser. |
-| `EXPIRED` | License or session has expired. |
-| `HMAC_FAILED` | Data integrity verification failed. |
-| `SSL_VERIFICATION_FAILED` | SSL certificate mismatch detected. |
-| `CONNECTION_ERROR` | Network issue or unreachable CGAuth server. |
+| `RATE_LIMIT_EXCEEDED` | Too many requests — rate limit exceeded. |
+| `METHOD_NOT_ALLOWED` | Invalid HTTP method (only POST is allowed). |
+| `INVALID_TYPE` | The “type” parameter must be either `license` or `user`. |
+| `MISSING_PARAMETERS` | Required parameters (e.g., key, HWID) are missing. |
+| `MISSING_PASSWORD` | Password is required for user authentication. |
+| `INVALID_LICENSE` | The license key is invalid or not found. |
+| `LICENSE_BANNED` | The license has been banned. |
+| `LICENSE_EXPIRED` | The license has expired. |
+| `UNKNOWN_STATUS` | The license has an unknown status. |
+| `HWID_MISMATCH` | This account or license is registered to another device. |
+| `USER_EXPIRED` | The user’s license period has expired. |
+| `FROZEN` | The account or license is temporarily frozen. |
+| `FROZEN_EXPIRED` | The frozen period has expired. |
+| `BANNED` | The user or IP is banned. |
+| `Decrypt error` | AES decryption failed (invalid key or IV). |
 
-If you see any of these errors, double-check your API credentials and ensure your `API_SECRET` and system clock are correct.
+If you encounter any of these errors, verify your API credentials, application type, and ensure your HWID and license settings match the CGAuth configuration.
 
----
 
 ## 🧾 API Reference
 

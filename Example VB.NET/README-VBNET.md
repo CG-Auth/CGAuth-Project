@@ -124,20 +124,26 @@ Install-Package Newtonsoft.Json
 
 ## 🚨 Error Codes & Meanings
 
-| Error Code | Meaning |
-|-------------|----------|
-| `INVALID_API_KEY` | API key is invalid or missing. |
-| `INVALID_LICENSE` | The license key does not exist or is expired. |
-| `INVALID_USER` | Incorrect username or password. |
-| `HWID_MISMATCH` | The license is bound to another device. |
-| `EXPIRED` | The license or session has expired. |
-| `HMAC_FAILED` | Data integrity check failed. |
-| `SSL_VERIFICATION_FAILED` | SSL certificate mismatch detected. |
-| `CONNECTION_ERROR` | Could not connect to the CGAuth server. |
+| Error Code | Description |
+|-------------|-------------|
+| `RATE_LIMIT_EXCEEDED` | Too many requests — rate limit exceeded. |
+| `METHOD_NOT_ALLOWED` | Invalid HTTP method (only POST is allowed). |
+| `INVALID_TYPE` | The “type” parameter must be either `license` or `user`. |
+| `MISSING_PARAMETERS` | Required parameters (e.g., key, HWID) are missing. |
+| `MISSING_PASSWORD` | Password is required for user authentication. |
+| `INVALID_LICENSE` | The license key is invalid or not found. |
+| `LICENSE_BANNED` | The license has been banned. |
+| `LICENSE_EXPIRED` | The license has expired. |
+| `UNKNOWN_STATUS` | The license has an unknown status. |
+| `HWID_MISMATCH` | This account or license is registered to another device. |
+| `USER_EXPIRED` | The user’s license period has expired. |
+| `FROZEN` | The account or license is temporarily frozen. |
+| `FROZEN_EXPIRED` | The frozen period has expired. |
+| `BANNED` | The user or IP is banned. |
+| `Decrypt error` | AES decryption failed (invalid key or IV). |
 
-If you encounter these errors, verify your API credentials and ensure the SSL key and app name match your CGAuth dashboard configuration.
+If you encounter any of these errors, verify your API credentials, application type, and ensure your HWID and license settings match the CGAuth configuration.
 
----
 
 ## 🧾 API Reference
 
