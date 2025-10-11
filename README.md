@@ -85,15 +85,22 @@ This ensures every authentication request is **secure, unique, and tamper-proof*
 ## 🚨 Common Error Codes
 
 | Error Code | Meaning |
-|-------------|----------|
-| `INVALID_API_KEY` | The provided API key is invalid. |
-| `INVALID_LICENSE` | License key not found or expired. |
-| `INVALID_USER` | Invalid username or password. |
-| `HWID_MISMATCH` | The license is bound to another device. |
-| `EXPIRED` | License or session has expired. |
-| `HMAC_FAILED` | Data integrity check failed. |
-| `SSL_VERIFICATION_FAILED` | SSL certificate mismatch detected. |
-| `CONNECTION_ERROR` | Could not connect to the CGAuth API. |
+|-------------|-------------|
+| `RATE_LIMIT_EXCEEDED` | Too many requests — rate limit exceeded. |
+| `METHOD_NOT_ALLOWED` | Invalid HTTP method (only POST is allowed). |
+| `INVALID_TYPE` | The “type” parameter must be either `license` or `user`. |
+| `MISSING_PARAMETERS` | Required parameters (e.g., key, HWID) are missing. |
+| `MISSING_PASSWORD` | Password is required for user authentication. |
+| `INVALID_LICENSE` | The license key is invalid or not found. |
+| `LICENSE_BANNED` | The license has been banned. |
+| `LICENSE_EXPIRED` | The license has expired. |
+| `UNKNOWN_STATUS` | The license has an unknown status. |
+| `HWID_MISMATCH` | This account or license is registered to another device. |
+| `USER_EXPIRED` | The user’s license period has expired. |
+| `FROZEN` | The account or license is temporarily frozen. |
+| `FROZEN_EXPIRED` | The frozen period has expired. |
+| `BANNED` | The user or IP is banned. |
+| `Decrypt error` | AES decryption failed (invalid key or IV). |
 
 If any of these occur, ensure your API credentials and SSL hash are correctly set.  
 For more details, visit the [API Documentation](https://cgauth.com/api-help).
