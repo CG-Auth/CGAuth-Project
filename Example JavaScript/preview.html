@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CGAuth License System</title>
+    <link href="css/styles.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 CGAuth License System</h1>
+        
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('license')">License Key</button>
+            <button class="tab" onclick="switchTab('user')">Username/Password</button>
+            <button class="tab" onclick="switchTab('hwid')">HWID</button>
+        </div>
+        
+        <!-- License Key Authentication Tab -->
+        <div id="license-tab" class="tab-content active">
+            <form onsubmit="authenticateLicense(event)">
+                <div class="form-group">
+                    <label for="license_key">License Key:</label>
+                    <input type="text" id="license_key" placeholder="Enter your license key" required>
+                </div>
+                <button type="submit">Authenticate</button>
+            </form>
+        </div>
+        
+        <!-- Username/Password Authentication Tab -->
+        <div id="user-tab" class="tab-content">
+            <form onsubmit="authenticateUser(event)">
+                <div class="form-group">
+                    <label for="username">Username:</label>
+                    <input type="text" id="username" placeholder="Enter username" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password:</label>
+                    <input type="password" id="password" placeholder="Enter password" required>
+                </div>
+                <button type="submit">Authenticate</button>
+            </form>
+        </div>
+        
+        <!-- Browser Fingerprint (HWID) Display Tab -->
+        <div id="hwid-tab" class="tab-content">
+            <div class="hwid-display">
+                <strong>Your Browser Fingerprint:</strong>
+                <code id="hwid-value" onclick="copyHWID()">Loading...</code>
+                <small style="display:block; margin-top:10px; color:#666;">Click to copy</small>
+            </div>
+        </div>
+        
+        <!-- Loading Indicator -->
+        <div class="loading" id="loading">
+            <p>⏳ Processing...</p>
+        </div>
+        
+        <!-- Result Display Area -->
+        <div class="result" id="result"></div>
+    </div>
+    
+    <!-- Include CGAuth JavaScript Library -->
+    <script src="cgauth.js"></script>
+    <script>
+        // ====================================================================
+        // PAGE INITIALIZATION
+        // ====================================================================
+        
+        /**
+         * Initialize page on load
+         * Generates and displays browser fingerprint (HWID)
+         */
+        window.onload = async function() {
+            // Generate browser fingerprint asynchronously
+            const hwid = await CGAuth.getHWID();
+            // Display the fingerprint in the HWID tab
+            document.getElementById('hwid-value').textContent = hwid;
+        };
+        
+        // ====================================================================
+        // TAB NAVIGATION
+        // ====================================================================
+        
+        /**
+         * Switch between authentication tabs
+         * @param {string} tab - Tab name to activate ('license', 'user', or 'hwid')
+         */
+        function switchTab(tab) {
+            // Remove active class from all tab contents
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            // Remove active class from all tab buttons
+            document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+            // Activate selected tab content
+            document.getElementById(tab + '-tab').classList.add('active');
+            // Activate selected tab button
+            event.target.classList.add('active');
+            // Hide any previous results
+            hideResult();
+        }
+        
+        // ====================================================================
+        // AUTHENTICATION HANDLERS
+        // ====================================================================
+        
+        /**
+         * Handle license key authentication
+         * @param {Event} event - Form submit event
+         */
+        async function authenticateLicense(event) {
+            // Prevent default form submission
+            event.preventDefault();
+            
+            // Get license key from input field
+            const licenseKey = document.getElementById('license_key').value;
+            
+            // Generate browser fingerprint for this device
+            const hwid = await CGAuth.getHWID();
+            
+            // Show loading indicator
+            showLoading();
+            hideResult();
+            
+            // Send authentication request to CGAuth API
+            const result = await CGAuth.authLicense(licenseKey, hwid);
+            
+            // Hide loading and display result
+            hideLoading();
+            showResult(result);
+        }
+        
+        /**
+         * Handle username/password authentication
+         * @param {Event} event - Form submit event
+         */
+        async function authenticateUser(event) {
+            // Prevent default form submission
+            event.preventDefault();
+            
+            // Get credentials from input fields
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            // Generate browser fingerprint for this device
+            const hwid = await CGAuth.getHWID();
+            
+            // Show loading indicator
+            showLoading();
+            hideResult();
+            
+            // Send authentication request to CGAuth API
+            const result = await CGAuth.authUser(username, password, hwid);
+            
+            // Hide loading and display result
+            hideLoading();
+            showResult(result);
+        }
+        
+        // ====================================================================
+        // UI DISPLAY FUNCTIONS
+        // ====================================================================
+        
+        /**
+         * Display authentication result
+         * @param {Object} data - Authentication response data
+         * @param {boolean} data.success - Whether authentication succeeded
+         * @param {Object} data.data - License/user information (if successful)
+         * @param {string} data.error - Error message (if failed)
+         */
+        function showResult(data) {
+            const resultDiv = document.getElementById('result');
+            
+            // Apply appropriate CSS class based on success/failure
+            resultDiv.className = 'result show ' + (data.success ? 'success' : 'error');
+            
+            if (data.success) {
+                // SUCCESS - Display detailed license information
+                const d = data.data;
+                resultDiv.innerHTML = `
+                    <h3>✓ Authentication Successful</h3>
+                    <div class="result-item"><strong>App Name:</strong> ${d.app_name}</div>
+                    <div class="result-item"><strong>Status:</strong> ${d.status}</div>
+                    <div class="result-item"><strong>Days Remaining:</strong> ${d.days_remaining}</div>
+                    <div class="result-item"><strong>Hours Remaining:</strong> ${d.hours_remaining}</div>
+                    <div class="result-item"><strong>Expiry Date:</strong> ${d.expiry_date}</div>
+                `;
+            } else {
+                // FAILURE - Display error message
+                resultDiv.innerHTML = `<h3>✗ Authentication Failed</h3><p>${data.error}</p>`;
+            }
+        }
+        
+        /**
+         * Hide the result display
+         */
+        function hideResult() {
+            document.getElementById('result').classList.remove('show');
+        }
+        
+        /**
+         * Show the loading indicator
+         */
+        function showLoading() {
+            document.getElementById('loading').classList.add('show');
+        }
+        
+        /**
+         * Hide the loading indicator
+         */
+        function hideLoading() {
+            document.getElementById('loading').classList.remove('show');
+        }
+        
+        // ====================================================================
+        // UTILITY FUNCTIONS
+        // ====================================================================
+        
+        /**
+         * Copy browser fingerprint (HWID) to clipboard
+         * Uses the modern Clipboard API
+         */
+        async function copyHWID() {
+            const hwid = document.getElementById('hwid-value').textContent;
+            try {
+                // Copy to clipboard using Clipboard API
+                await navigator.clipboard.writeText(hwid);
+                alert('HWID copied to clipboard!');
+            } catch (err) {
+                // Handle clipboard permission errors
+                console.error('Failed to copy:', err);
+            }
+        }
+    </script>
+</body>
+</html>
