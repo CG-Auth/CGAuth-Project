@@ -19,23 +19,23 @@ Module CGAuth_Module
     ''' <summary>
     ''' Your application name - must match the license/user configuration
     ''' </summary>
-    Public YOUR_APP_NAME As String = "PUBG"
+    Public YOUR_APP_NAME As String = "WRITE_YOUR_APP_NAME"
 
     ''' <summary>
     ''' API Key for authentication - public identifier for your app
     ''' </summary>
-    Public API_KEY As String = "7a311cc779bd2500bfc29e7e3fd90027d2eb96d7225fe8932e0543ef7b23af01"
+    Public API_KEY As String = "WRITE_YOUR_API_KEY"
 
     ''' <summary>
     ''' API Secret for encryption and HMAC - MUST be kept private
     ''' </summary>
-    Public API_SECRET As String = "da14cd6591ce136dae7407e2087dca97a70eebf5fc3b4f2b2e8f779f2bf20b13"
+    Public API_SECRET As String = "WRITE_YOUR_API_SECRET"
 
     ''' <summary>
     ''' Expected SSL certificate hash for certificate pinning
     ''' Prevents man-in-the-middle attacks
     ''' </summary>
-    Public Const SSL_KEY As String = "95d4c3c7492bafb97174b22cce94ca30628e56d87b82f6df3ba910ccf4c90b92"
+    Public Const SSL_KEY As String = "WRITE_YOUR_SSL_KEY"
 
     ' ========================================================================
     ' HARDWARE ID (HWID) GENERATION
