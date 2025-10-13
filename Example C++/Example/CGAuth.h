@@ -3,6 +3,7 @@
  * 
  * Provides hardware-based license authentication with encryption
  * Uses WMI for HWID generation and OpenSSL for cryptographic operations
+ * Now includes Replay Attack Protection
  */
 
 #pragma once
@@ -20,6 +21,7 @@
 #include <sstream>          // String streams
 #include <iomanip>          // I/O manipulators
 #include <iostream>         // Standard I/O
+#include <ctime>            // Time functions
 
 // Link required libraries
 #pragma comment(lib, "wbemuuid.lib")  // WMI library
@@ -34,8 +36,9 @@ using json = nlohmann::json;
  * 
  * Provides static methods for:
  * - Hardware ID (HWID) generation
+ * - Request ID generation (NEW - for replay attack protection)
  * - Payload encryption/decryption
- * - HMAC verification
+ * - HMAC verification with request binding
  * - License and user authentication
  */
 class CGAuth {
@@ -120,6 +123,19 @@ public:
     // ========================================================================
     
     /**
+     * Generate unique request ID for each authentication attempt (NEW)
+     * Prevents replay attacks by ensuring each request is unique
+     * 
+     * Combines:
+     * - Current timestamp (milliseconds)
+     * - Random bytes
+     * - SHA256 hash for consistent length
+     * 
+     * @return SHA256 hash of timestamp + random bytes (lowercase hex)
+     */
+    static std::string GenerateRequestId();
+    
+    /**
      * Generate unique Hardware ID (HWID)
      * 
      * Uses Windows WMI to collect:
@@ -159,24 +175,27 @@ public:
     static std::string DecryptPayload(const std::string& encrypted);
     
     /**
-     * Verify HMAC-SHA256 signature
-     * Ensures data integrity and prevents tampering
+     * Verify HMAC-SHA256 signature with request binding (UPDATED)
+     * Ensures data integrity and prevents tampering and replay attacks
      * 
      * @param data Data to verify
      * @param hmac Received HMAC signature
+     * @param requestId Request ID for binding (NEW parameter)
      * @return true if HMAC is valid, false otherwise
      */
-    static bool VerifyHMAC(const std::string& data, const std::string& hmac);
+    static bool VerifyHMAC(const std::string& data, const std::string& hmac, const std::string& requestId);
     
     /**
-     * Authenticate using license key
+     * Authenticate using license key with replay attack protection
      * 
      * Process:
-     * 1. Encrypt authentication parameters
-     * 2. Send POST request to API via cURL
-     * 3. Verify timestamp (replay attack protection)
-     * 4. Verify HMAC (data integrity)
-     * 5. Decrypt response
+     * 1. Generate unique request ID
+     * 2. Encrypt authentication parameters (with request_id and timestamp)
+     * 3. Send POST request to API via cURL
+     * 4. Verify timestamp (replay attack protection - 2 min tolerance)
+     * 5. Verify HMAC with request_id binding (data integrity)
+     * 6. Verify request_id in response matches request
+     * 7. Decrypt response
      * 
      * @param licenseKey License key to validate
      * @param hwid Hardware ID of the machine
@@ -185,14 +204,16 @@ public:
     static json AuthLicense(const std::string& licenseKey, const std::string& hwid);
     
     /**
-     * Authenticate using username and password
+     * Authenticate using username and password with replay attack protection
      * 
      * Process:
-     * 1. Encrypt authentication parameters (including password)
-     * 2. Send POST request to API via cURL
-     * 3. Verify timestamp (replay attack protection)
-     * 4. Verify HMAC (data integrity)
-     * 5. Decrypt response
+     * 1. Generate unique request ID
+     * 2. Encrypt authentication parameters (including password, request_id, timestamp)
+     * 3. Send POST request to API via cURL
+     * 4. Verify timestamp (replay attack protection - 2 min tolerance)
+     * 5. Verify HMAC with request_id binding (data integrity)
+     * 6. Verify request_id in response matches request
+     * 7. Decrypt response
      * 
      * @param username User's username
      * @param password User's password

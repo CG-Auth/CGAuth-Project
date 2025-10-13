@@ -5,6 +5,7 @@ import base64
 import time
 import requests
 import platform
+import secrets
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 from Crypto.Util.Padding import pad, unpad
@@ -16,6 +17,24 @@ class CGAuth:
     API_KEY = "WRITE_YOUR_API_KEY"
     API_SECRET = "WRITE_YOUR_API_SECRET"
     SSL_KEY = "WRITE_YOUR_SSL_KEY"
+
+    # ========================================================================
+    # REQUEST ID GENERATION (NEW)
+    # ========================================================================
+    
+    @staticmethod
+    def generate_request_id():
+        """
+        Generate unique request ID for each authentication attempt
+        Prevents replay attacks by ensuring each request is unique
+        """
+        # Combine timestamp + random bytes for uniqueness
+        timestamp = str(int(time.time() * 1000))
+        random_bytes = secrets.token_hex(16)
+        
+        # Hash for consistent length
+        combined = timestamp + random_bytes
+        return hashlib.sha256(combined.encode()).hexdigest().lower()
 
     # ========================================================================
     # HWID GENERATION
@@ -137,19 +156,22 @@ class CGAuth:
         return decrypted.decode()
 
     # ========================================================================
-    # HMAC VERIFICATION
+    # HMAC VERIFICATION (UPDATED)
     # ========================================================================
     
     @staticmethod
-    def verify_hmac(data, received_hmac):
+    def verify_hmac(data, received_hmac, request_id):
         """
-        Verify HMAC signature to ensure data integrity
-        This prevents tampering with the response data
+        Verify HMAC signature with request binding to ensure data integrity
+        This prevents tampering and replay attacks
         """
-        # Compute HMAC-SHA256 of the data
+        # Combine data + request_id for HMAC calculation
+        combined = data + request_id
+        
+        # Compute HMAC-SHA256 of the combined data
         computed = hmac.new(
             CGAuth.API_SECRET.encode(),
-            data.encode(),
+            combined.encode(),
             hashlib.sha256
         ).hexdigest()
         
@@ -157,29 +179,32 @@ class CGAuth:
         return computed.lower() == received_hmac.lower()
 
     # ========================================================================
-    # AUTHENTICATION - CLOUDFLARE BYPASS
+    # AUTHENTICATION - WITH REPLAY ATTACK PROTECTION
     # ========================================================================
     
     @staticmethod
     def auth_license(license_key, hwid):
         """
-        Authenticate using a license key
-        Includes Cloudflare bypass techniques
+        Authenticate using a license key with replay attack protection
         """
         try:
-            # Prepare authentication parameters
+            # ✅ Generate unique request ID
+            request_id = CGAuth.generate_request_id()
+            
+            # ✅ Prepare authentication parameters with request_id and timestamp
             params = {
                 "api_secret": CGAuth.API_SECRET,
                 "type": "license",
                 "key": license_key,
-                "hwid": hwid
+                "hwid": hwid,
+                "request_id": request_id,  # NEW
+                "timestamp": str(int(time.time()))  # NEW
             }
             
             # Encrypt the payload for secure transmission
             encrypted = CGAuth.encrypt_payload(params)
             
             # Set headers to bypass Cloudflare protection
-            # These headers make the request look like a legitimate browser
             headers = {
                 "Content-Type": "application/x-www-form-urlencoded",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -203,8 +228,8 @@ class CGAuth:
                     "payload": encrypted
                 },
                 headers=headers,
-                timeout=15,  # 15 second timeout
-                verify=True  # Verify SSL certificate
+                timeout=15,
+                verify=True
             )
             
             # Check HTTP status code
@@ -231,7 +256,7 @@ class CGAuth:
                 }
             
             # Validate response structure
-            if "data" not in json_response or "hmac" not in json_response:
+            if "data" not in json_response or "hmac" not in json_response or "timestamp" not in json_response:
                 return {
                     "success": False,
                     "error": f"Invalid response structure: {json_response}"
@@ -242,26 +267,40 @@ class CGAuth:
             received_hmac = json_response["hmac"]
             timestamp = json_response["timestamp"]
             
-            # Verify timestamp to prevent replay attacks (5 minutes tolerance)
-            if abs(int(time.time()) - timestamp) > 300:
-                raise Exception("Response expired")
+            # ✅ Verify timestamp (stricter: 2 minutes tolerance)
+            if abs(int(time.time()) - timestamp) > 120:
+                return {
+                    "success": False,
+                    "error": "Response expired"
+                }
             
-            # Verify HMAC to ensure data integrity
-            if not CGAuth.verify_hmac(enc_data, received_hmac):
-                raise Exception("HMAC verification failed")
+            # ✅ Verify HMAC with request_id binding
+            if not CGAuth.verify_hmac(enc_data, received_hmac, request_id):
+                return {
+                    "success": False,
+                    "error": "HMAC verification failed - possible replay attack"
+                }
             
             # Decrypt the response data
             decrypted = CGAuth.decrypt_payload(enc_data)
-            return json.loads(decrypted)
+            result = json.loads(decrypted)
+            
+            # ✅ Verify request_id in response matches our request
+            response_request_id = result.get("request_id")
+            if response_request_id and response_request_id != request_id:
+                return {
+                    "success": False,
+                    "error": "Request ID mismatch - possible replay attack"
+                }
+            
+            return result
             
         except requests.exceptions.RequestException as e:
-            # Handle network-related errors
             return {
                 "success": False,
                 "error": f"Network error: {str(e)}"
             }
         except Exception as e:
-            # Handle any other errors
             return {
                 "success": False,
                 "error": f"Error: {str(e)}"
@@ -270,17 +309,21 @@ class CGAuth:
     @staticmethod
     def auth_user(username, password, hwid):
         """
-        Authenticate using username and password
-        Similar to license authentication but with user credentials
+        Authenticate using username and password with replay attack protection
         """
         try:
-            # Prepare authentication parameters
+            # ✅ Generate unique request ID
+            request_id = CGAuth.generate_request_id()
+            
+            # ✅ Prepare authentication parameters with request_id and timestamp
             params = {
                 "api_secret": CGAuth.API_SECRET,
                 "type": "user",
                 "key": username,
                 "password": password,
-                "hwid": hwid
+                "hwid": hwid,
+                "request_id": request_id,  # NEW
+                "timestamp": str(int(time.time()))  # NEW
             }
             
             # Encrypt the payload for secure transmission
@@ -290,7 +333,10 @@ class CGAuth:
             headers = {
                 "Content-Type": "application/x-www-form-urlencoded",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/json, text/plain, */*"
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive"
             }
             
             # Use a session to maintain cookies and connection state
@@ -304,8 +350,8 @@ class CGAuth:
                     "payload": encrypted
                 },
                 headers=headers,
-                timeout=15,  # 15 second timeout
-                verify=True  # Verify SSL certificate
+                timeout=15,
+                verify=True
             )
             
             # Check HTTP status code
@@ -332,7 +378,7 @@ class CGAuth:
                 }
             
             # Validate response structure
-            if "data" not in json_response:
+            if "data" not in json_response or "hmac" not in json_response:
                 return {
                     "success": False,
                     "error": "Invalid response structure"
@@ -343,26 +389,40 @@ class CGAuth:
             received_hmac = json_response["hmac"]
             timestamp = json_response["timestamp"]
             
-            # Verify timestamp to prevent replay attacks (5 minutes tolerance)
-            if abs(int(time.time()) - timestamp) > 300:
-                raise Exception("Response expired")
+            # ✅ Verify timestamp (stricter: 2 minutes tolerance)
+            if abs(int(time.time()) - timestamp) > 120:
+                return {
+                    "success": False,
+                    "error": "Response expired"
+                }
             
-            # Verify HMAC to ensure data integrity
-            if not CGAuth.verify_hmac(enc_data, received_hmac):
-                raise Exception("HMAC verification failed")
+            # ✅ Verify HMAC with request_id binding
+            if not CGAuth.verify_hmac(enc_data, received_hmac, request_id):
+                return {
+                    "success": False,
+                    "error": "HMAC verification failed - possible replay attack"
+                }
             
             # Decrypt the response data
             decrypted = CGAuth.decrypt_payload(enc_data)
-            return json.loads(decrypted)
+            result = json.loads(decrypted)
+            
+            # ✅ Verify request_id in response matches our request
+            response_request_id = result.get("request_id")
+            if response_request_id and response_request_id != request_id:
+                return {
+                    "success": False,
+                    "error": "Request ID mismatch - possible replay attack"
+                }
+            
+            return result
             
         except requests.exceptions.RequestException as e:
-            # Handle network-related errors
             return {
                 "success": False,
                 "error": f"Network error: {str(e)}"
             }
         except Exception as e:
-            # Handle any other errors
             return {
                 "success": False,
                 "error": f"Error: {str(e)}"

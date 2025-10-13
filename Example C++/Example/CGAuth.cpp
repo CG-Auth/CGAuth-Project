@@ -2,7 +2,7 @@
  * CGAuth Implementation File
  * 
  * Implements all authentication and cryptographic functions
- * for the CGAuth license system
+ * for the CGAuth license system with Replay Attack Protection
  */
 
 #include "CGAuth.h"
@@ -221,6 +221,40 @@ size_t CGAuth::WriteCallback(void* contents, size_t size, size_t nmemb, void* us
 }
 
 // ============================================================================
+// REQUEST ID GENERATION (NEW)
+// ============================================================================
+
+/**
+ * Generate unique request ID for each authentication attempt
+ * Prevents replay attacks by ensuring each request is unique
+ * 
+ * @return SHA256 hash of timestamp + random bytes (lowercase hex)
+ */
+std::string CGAuth::GenerateRequestId() {
+    // Get current timestamp in milliseconds
+    auto now = std::chrono::system_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    std::string timestamp = std::to_string(ms);
+    
+    // Generate 16 random bytes
+    unsigned char randomBytes[16];
+    RAND_bytes(randomBytes, 16);
+    std::string randomHex = ToHex(randomBytes, 16);
+    
+    // Combine timestamp + random bytes
+    std::string combined = timestamp + randomHex;
+    
+    // Hash using SHA256 for consistent length
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256((unsigned char*)combined.c_str(), combined.size(), hash);
+    
+    // Return as lowercase hex string
+    std::string result = ToHex(hash, SHA256_DIGEST_LENGTH);
+    std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+    return result;
+}
+
+// ============================================================================
 // HWID GENERATION
 // ============================================================================
 
@@ -383,28 +417,33 @@ std::string CGAuth::DecryptPayload(const std::string& encrypted) {
 }
 
 // ============================================================================
-// HMAC VERIFICATION
+// HMAC VERIFICATION (UPDATED WITH REQUEST BINDING)
 // ============================================================================
 
 /**
- * Verify HMAC-SHA256 signature to ensure data integrity
+ * Verify HMAC-SHA256 signature with request binding to ensure data integrity
  * 
  * HMAC (Hash-based Message Authentication Code) prevents:
  * - Data tampering
  * - Message forgery
  * - Unauthorized modifications
+ * - Replay attacks (when combined with request_id)
  * 
  * @param data Data to verify
  * @param hmac Received HMAC signature (hex string)
+ * @param requestId Request ID for binding (NEW parameter)
  * @return true if HMAC is valid, false otherwise
  */
-bool CGAuth::VerifyHMAC(const std::string& data, const std::string& hmac) {
-    // Compute HMAC-SHA256 of the data
+bool CGAuth::VerifyHMAC(const std::string& data, const std::string& hmac, const std::string& requestId) {
+    // Combine data + request_id for HMAC calculation
+    std::string combined = data + requestId;
+    
+    // Compute HMAC-SHA256 of the combined data
     unsigned char hash[SHA256_DIGEST_LENGTH];
     unsigned int len;
 
     HMAC(EVP_sha256(), API_SECRET.c_str(), API_SECRET.size(),
-        (unsigned char*)data.c_str(), data.size(), hash, &len);
+        (unsigned char*)combined.c_str(), combined.size(), hash, &len);
 
     // Convert hash to hexadecimal string
     std::string computed = ToHex(hash, SHA256_DIGEST_LENGTH);
@@ -414,21 +453,23 @@ bool CGAuth::VerifyHMAC(const std::string& data, const std::string& hmac) {
 }
 
 // ============================================================================
-// AUTHENTICATION FUNCTIONS
+// AUTHENTICATION FUNCTIONS (WITH REPLAY ATTACK PROTECTION)
 // ============================================================================
 
 /**
- * Authenticate using license key
+ * Authenticate using license key with replay attack protection
  * 
  * Complete authentication flow:
- * 1. Prepare authentication parameters
- * 2. Encrypt payload with AES-256-CBC
- * 3. URL-encode parameters
- * 4. Send POST request via cURL
- * 5. Parse JSON response
- * 6. Verify timestamp (prevent replay attacks - 5 min tolerance)
- * 7. Verify HMAC (ensure data integrity)
- * 8. Decrypt response data
+ * 1. Generate unique request ID
+ * 2. Prepare authentication parameters (with request_id and timestamp)
+ * 3. Encrypt payload with AES-256-CBC
+ * 4. URL-encode parameters
+ * 5. Send POST request via cURL
+ * 6. Parse JSON response
+ * 7. Verify timestamp (prevent replay attacks - 2 min tolerance)
+ * 8. Verify HMAC with request_id binding (ensure data integrity)
+ * 9. Verify request_id in response matches request
+ * 10. Decrypt response data
  * 
  * @param licenseKey License key to validate
  * @param hwid Hardware ID of the machine
@@ -436,12 +477,17 @@ bool CGAuth::VerifyHMAC(const std::string& data, const std::string& hmac) {
  */
 json CGAuth::AuthLicense(const std::string& licenseKey, const std::string& hwid) {
     try {
-        // Prepare authentication parameters
+        // ✅ Generate unique request ID
+        std::string requestId = GenerateRequestId();
+        
+        // ✅ Prepare authentication parameters with request_id and timestamp
         json params = {
             {"api_secret", API_SECRET},
             {"type", "license"},
             {"key", licenseKey},
-            {"hwid", hwid}
+            {"hwid", hwid},
+            {"request_id", requestId},  // NEW
+            {"timestamp", std::to_string(std::time(nullptr))}  // NEW
         };
 
         // Encrypt payload for secure transmission
@@ -477,24 +523,37 @@ json CGAuth::AuthLicense(const std::string& licenseKey, const std::string& hwid)
 
         // Parse JSON response
         json jsonResponse = json::parse(response);
+        
+        // Validate response structure
+        if (!jsonResponse.contains("data") || !jsonResponse.contains("hmac") || !jsonResponse.contains("timestamp")) {
+            throw std::runtime_error("Invalid response structure");
+        }
+        
         std::string encData = jsonResponse["data"];
         std::string receivedHmac = jsonResponse["hmac"];
         long timestamp = jsonResponse["timestamp"];
 
-        // Verify timestamp to prevent replay attacks (5 minutes tolerance)
+        // ✅ Verify timestamp (stricter: 2 minutes tolerance)
         long now = std::time(nullptr);
-        if (std::abs(now - timestamp) > 300) {
+        if (std::abs(now - timestamp) > 120) {
             throw std::runtime_error("Response expired");
         }
 
-        // Verify HMAC to ensure data integrity
-        if (!VerifyHMAC(encData, receivedHmac)) {
-            throw std::runtime_error("HMAC verification failed");
+        // ✅ Verify HMAC with request_id binding
+        if (!VerifyHMAC(encData, receivedHmac, requestId)) {
+            throw std::runtime_error("HMAC verification failed - possible replay attack");
         }
 
         // Decrypt the response data
         std::string decrypted = DecryptPayload(encData);
-        return json::parse(decrypted);
+        json result = json::parse(decrypted);
+        
+        // ✅ Verify request_id in response matches our request
+        if (result.contains("request_id") && result["request_id"] != requestId) {
+            throw std::runtime_error("Request ID mismatch - possible replay attack");
+        }
+        
+        return result;
     }
     catch (const std::exception& e) {
         // Return error response if authentication fails
@@ -503,7 +562,7 @@ json CGAuth::AuthLicense(const std::string& licenseKey, const std::string& hwid)
 }
 
 /**
- * Authenticate using username and password
+ * Authenticate using username and password with replay attack protection
  * 
  * Same authentication flow as AuthLicense but with user credentials
  * Password is encrypted before transmission
@@ -515,13 +574,18 @@ json CGAuth::AuthLicense(const std::string& licenseKey, const std::string& hwid)
  */
 json CGAuth::AuthUser(const std::string& username, const std::string& password, const std::string& hwid) {
     try {
-        // Prepare authentication parameters
+        // ✅ Generate unique request ID
+        std::string requestId = GenerateRequestId();
+        
+        // ✅ Prepare authentication parameters with request_id and timestamp
         json params = {
             {"api_secret", API_SECRET},
             {"type", "user"},
             {"key", username},
             {"password", password},
-            {"hwid", hwid}
+            {"hwid", hwid},
+            {"request_id", requestId},  // NEW
+            {"timestamp", std::to_string(std::time(nullptr))}  // NEW
         };
 
         // Encrypt payload for secure transmission
@@ -557,24 +621,37 @@ json CGAuth::AuthUser(const std::string& username, const std::string& password, 
 
         // Parse JSON response
         json jsonResponse = json::parse(response);
+        
+        // Validate response structure
+        if (!jsonResponse.contains("data") || !jsonResponse.contains("hmac") || !jsonResponse.contains("timestamp")) {
+            throw std::runtime_error("Invalid response structure");
+        }
+        
         std::string encData = jsonResponse["data"];
         std::string receivedHmac = jsonResponse["hmac"];
         long timestamp = jsonResponse["timestamp"];
 
-        // Verify timestamp to prevent replay attacks (5 minutes tolerance)
+        // ✅ Verify timestamp (stricter: 2 minutes tolerance)
         long now = std::time(nullptr);
-        if (std::abs(now - timestamp) > 300) {
+        if (std::abs(now - timestamp) > 120) {
             throw std::runtime_error("Response expired");
         }
 
-        // Verify HMAC to ensure data integrity
-        if (!VerifyHMAC(encData, receivedHmac)) {
-            throw std::runtime_error("HMAC verification failed");
+        // ✅ Verify HMAC with request_id binding
+        if (!VerifyHMAC(encData, receivedHmac, requestId)) {
+            throw std::runtime_error("HMAC verification failed - possible replay attack");
         }
 
         // Decrypt the response data
         std::string decrypted = DecryptPayload(encData);
-        return json::parse(decrypted);
+        json result = json::parse(decrypted);
+        
+        // ✅ Verify request_id in response matches our request
+        if (result.contains("request_id") && result["request_id"] != requestId) {
+            throw std::runtime_error("Request ID mismatch - possible replay attack");
+        }
+        
+        return result;
     }
     catch (const std::exception& e) {
         // Return error response if authentication fails

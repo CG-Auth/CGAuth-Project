@@ -3,6 +3,7 @@
  * 
  * Provides client-side authentication with license key or username/password
  * Uses Web Crypto API for encryption and browser fingerprinting for HWID
+ * Now includes Replay Attack Protection
  */
 class CGAuth {
     // ========================================================================
@@ -20,6 +21,37 @@ class CGAuth {
     
     /** @type {string} API Secret for encryption and HMAC - MUST be kept private */
     static API_SECRET = "WRITE_YOUR_API_SECRET";
+
+    // ========================================================================
+    // REQUEST ID GENERATION (NEW)
+    // ========================================================================
+    
+    /**
+     * Generate unique request ID for each authentication attempt
+     * Prevents replay attacks by ensuring each request is unique
+     * 
+     * @returns {Promise<string>} SHA256 hash of timestamp + random bytes
+     */
+    static async generateRequestId() {
+        // Combine timestamp + random bytes for uniqueness
+        const timestamp = Date.now().toString();
+        const randomBytes = crypto.getRandomValues(new Uint8Array(16));
+        const randomHex = Array.from(randomBytes)
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+        
+        // Hash for consistent length using Web Crypto API
+        const combined = timestamp + randomHex;
+        const encoder = new TextEncoder();
+        const data = encoder.encode(combined);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        
+        // Convert hash buffer to hexadecimal string
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        
+        return hashHex.toLowerCase();
+    }
 
     // ========================================================================
     // HWID GENERATION (Browser Fingerprinting)
@@ -183,18 +215,22 @@ class CGAuth {
     }
 
     // ========================================================================
-    // HMAC VERIFICATION (DATA INTEGRITY)
+    // HMAC VERIFICATION (UPDATED WITH REQUEST BINDING)
     // ========================================================================
     
     /**
-     * Verify HMAC-SHA256 signature to ensure data integrity
-     * Prevents tampering with response data
+     * Verify HMAC-SHA256 signature with request binding to ensure data integrity
+     * Prevents tampering and replay attacks
      * 
      * @param {string} data - Data to verify
      * @param {string} receivedHmac - Received HMAC signature
+     * @param {string} requestId - Request ID for binding
      * @returns {Promise<boolean>} True if HMAC is valid, false otherwise
      */
-    static async verifyHMAC(data, receivedHmac) {
+    static async verifyHMAC(data, receivedHmac, requestId) {
+        // Combine data + request_id for HMAC calculation
+        const combined = data + requestId;
+        
         // Prepare the HMAC key
         const encoder = new TextEncoder();
         const keyData = encoder.encode(CGAuth.API_SECRET);
@@ -209,7 +245,7 @@ class CGAuth {
         );
         
         // Compute HMAC signature
-        const messageData = encoder.encode(data);
+        const messageData = encoder.encode(combined);
         const signature = await crypto.subtle.sign('HMAC', key, messageData);
         
         // Convert signature to hexadecimal string
@@ -221,18 +257,20 @@ class CGAuth {
     }
 
     // ========================================================================
-    // AUTHENTICATION FUNCTIONS
+    // AUTHENTICATION FUNCTIONS (WITH REPLAY ATTACK PROTECTION)
     // ========================================================================
     
     /**
-     * Authenticate using a license key
+     * Authenticate using a license key with replay attack protection
      * 
      * Process:
-     * 1. Encrypt authentication parameters
-     * 2. Send POST request to API
-     * 3. Verify timestamp (prevent replay attacks)
-     * 4. Verify HMAC (ensure data integrity)
-     * 5. Decrypt response data
+     * 1. Generate unique request ID
+     * 2. Encrypt authentication parameters (with request_id and timestamp)
+     * 3. Send POST request to API
+     * 4. Verify timestamp (prevent replay attacks)
+     * 5. Verify HMAC with request_id binding (ensure data integrity)
+     * 6. Verify request_id in response matches request
+     * 7. Decrypt response data
      * 
      * @param {string} licenseKey - License key to validate
      * @param {string} hwid - Browser fingerprint (Hardware ID)
@@ -240,12 +278,17 @@ class CGAuth {
      */
     static async authLicense(licenseKey, hwid) {
         try {
-            // Prepare authentication parameters
+            // ✅ Generate unique request ID
+            const requestId = await CGAuth.generateRequestId();
+            
+            // ✅ Prepare authentication parameters with request_id and timestamp
             const params = {
                 api_secret: CGAuth.API_SECRET,
                 type: 'license',
                 key: licenseKey,
-                hwid: hwid
+                hwid: hwid,
+                request_id: requestId,  // NEW
+                timestamp: Math.floor(Date.now() / 1000).toString()  // NEW (Unix timestamp)
             };
             
             // Encrypt the payload for secure transmission
@@ -265,24 +308,37 @@ class CGAuth {
             
             // Parse JSON response
             const jsonResponse = await response.json();
+            
+            // Validate response structure
+            if (!jsonResponse.data || !jsonResponse.hmac || !jsonResponse.timestamp) {
+                throw new Error('Invalid response structure');
+            }
+            
             const encData = jsonResponse.data;
             const receivedHmac = jsonResponse.hmac;
             const timestamp = jsonResponse.timestamp;
             
-            // Verify timestamp to prevent replay attacks (5 minutes tolerance)
-            const now = Math.floor(Date.now() / 1000);  // Current Unix timestamp
-            if (Math.abs(now - timestamp) > 300) {
+            // ✅ Verify timestamp (stricter: 2 minutes tolerance)
+            const now = Math.floor(Date.now() / 1000);
+            if (Math.abs(now - timestamp) > 120) {
                 throw new Error('Response expired');
             }
             
-            // Verify HMAC to ensure data integrity
-            if (!await CGAuth.verifyHMAC(encData, receivedHmac)) {
-                throw new Error('HMAC verification failed');
+            // ✅ Verify HMAC with request_id binding
+            if (!await CGAuth.verifyHMAC(encData, receivedHmac, requestId)) {
+                throw new Error('HMAC verification failed - possible replay attack');
             }
             
             // Decrypt the response data
             const decrypted = await CGAuth.decryptPayload(encData);
-            return JSON.parse(decrypted);
+            const result = JSON.parse(decrypted);
+            
+            // ✅ Verify request_id in response matches our request
+            if (result.request_id && result.request_id !== requestId) {
+                throw new Error('Request ID mismatch - possible replay attack');
+            }
+            
+            return result;
             
         } catch (error) {
             // Return error response if authentication fails
@@ -294,14 +350,16 @@ class CGAuth {
     }
     
     /**
-     * Authenticate using username and password
+     * Authenticate using username and password with replay attack protection
      * 
      * Process:
-     * 1. Encrypt authentication parameters (including password)
-     * 2. Send POST request to API
-     * 3. Verify timestamp (prevent replay attacks)
-     * 4. Verify HMAC (ensure data integrity)
-     * 5. Decrypt response data
+     * 1. Generate unique request ID
+     * 2. Encrypt authentication parameters (including password, request_id, timestamp)
+     * 3. Send POST request to API
+     * 4. Verify timestamp (prevent replay attacks)
+     * 5. Verify HMAC with request_id binding (ensure data integrity)
+     * 6. Verify request_id in response matches request
+     * 7. Decrypt response data
      * 
      * @param {string} username - User's username
      * @param {string} password - User's password
@@ -310,13 +368,18 @@ class CGAuth {
      */
     static async authUser(username, password, hwid) {
         try {
-            // Prepare authentication parameters
+            // ✅ Generate unique request ID
+            const requestId = await CGAuth.generateRequestId();
+            
+            // ✅ Prepare authentication parameters with request_id and timestamp
             const params = {
                 api_secret: CGAuth.API_SECRET,
                 type: 'user',
                 key: username,
                 password: password,
-                hwid: hwid
+                hwid: hwid,
+                request_id: requestId,  // NEW
+                timestamp: Math.floor(Date.now() / 1000).toString()  // NEW (Unix timestamp)
             };
             
             // Encrypt the payload for secure transmission
@@ -336,24 +399,37 @@ class CGAuth {
             
             // Parse JSON response
             const jsonResponse = await response.json();
+            
+            // Validate response structure
+            if (!jsonResponse.data || !jsonResponse.hmac || !jsonResponse.timestamp) {
+                throw new Error('Invalid response structure');
+            }
+            
             const encData = jsonResponse.data;
             const receivedHmac = jsonResponse.hmac;
             const timestamp = jsonResponse.timestamp;
             
-            // Verify timestamp to prevent replay attacks (5 minutes tolerance)
-            const now = Math.floor(Date.now() / 1000);  // Current Unix timestamp
-            if (Math.abs(now - timestamp) > 300) {
+            // ✅ Verify timestamp (stricter: 2 minutes tolerance)
+            const now = Math.floor(Date.now() / 1000);
+            if (Math.abs(now - timestamp) > 120) {
                 throw new Error('Response expired');
             }
             
-            // Verify HMAC to ensure data integrity
-            if (!await CGAuth.verifyHMAC(encData, receivedHmac)) {
-                throw new Error('HMAC verification failed');
+            // ✅ Verify HMAC with request_id binding
+            if (!await CGAuth.verifyHMAC(encData, receivedHmac, requestId)) {
+                throw new Error('HMAC verification failed - possible replay attack');
             }
             
             // Decrypt the response data
             const decrypted = await CGAuth.decryptPayload(encData);
-            return JSON.parse(decrypted);
+            const result = JSON.parse(decrypted);
+            
+            // ✅ Verify request_id in response matches our request
+            if (result.request_id && result.request_id !== requestId) {
+                throw new Error('Request ID mismatch - possible replay attack');
+            }
+            
+            return result;
             
         } catch (error) {
             // Return error response if authentication fails

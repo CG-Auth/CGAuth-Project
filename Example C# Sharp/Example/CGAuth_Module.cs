@@ -8,6 +8,7 @@ using System.Management;
 using System.Security.Cryptography.X509Certificates;
 using System.Collections.Generic;
 using System.Windows.Forms;
+using System.Linq;
 
 namespace Example
 {
@@ -25,6 +26,41 @@ namespace Example
         
         // SSL certificate hash for certificate pinning (security validation)
         public const string SSL_KEY = "WRITE_YOUR_SSL_KEY";
+
+        // ========================================================================
+        // REQUEST ID GENERATION (NEW)
+        // ========================================================================
+
+        /// <summary>
+        /// Generates a unique request ID for each authentication attempt
+        /// Prevents replay attacks by ensuring each request is unique
+        /// </summary>
+        /// <returns>SHA256 hash of timestamp + random bytes (lowercase hex)</returns>
+        public static string GenerateRequestId()
+        {
+            // Combine timestamp (milliseconds) + random bytes for uniqueness
+            long timestamp = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+            
+            byte[] randomBytes = new byte[16];
+            using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+            {
+                rng.GetBytes(randomBytes);
+            }
+            
+            string randomHex = BitConverter.ToString(randomBytes).Replace("-", "");
+            string combined = timestamp.ToString() + randomHex;
+            
+            // Hash for consistent length using SHA256
+            using (SHA256 sha = SHA256.Create())
+            {
+                byte[] hashBytes = sha.ComputeHash(Encoding.UTF8.GetBytes(combined));
+                return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+            }
+        }
+
+        // ========================================================================
+        // HWID GENERATION
+        // ========================================================================
 
         /// <summary>
         /// Generates a unique Hardware ID (HWID) based on system components
@@ -96,6 +132,10 @@ namespace Example
             }
         }
 
+        // ========================================================================
+        // SSL CERTIFICATE VALIDATION
+        // ========================================================================
+
         /// <summary>
         /// Validates SSL certificate using certificate pinning
         /// Prevents man-in-the-middle attacks by verifying the server's certificate hash
@@ -125,6 +165,10 @@ namespace Example
             }
             return true;
         }
+
+        // ========================================================================
+        // ENCRYPTION/DECRYPTION
+        // ========================================================================
 
         /// <summary>
         /// Encrypts the payload using AES-256-CBC encryption
@@ -210,16 +254,27 @@ namespace Example
             }
         }
 
+        // ========================================================================
+        // HMAC VERIFICATION (UPDATED WITH REQUEST BINDING)
+        // ========================================================================
+
         /// <summary>
-        /// Verifies HMAC signature to ensure data integrity
-        /// Prevents tampering with the server response
+        /// Verifies HMAC signature with request binding to ensure data integrity
+        /// Prevents tampering and replay attacks
         /// </summary>
-        public static bool VerifyHMAC(string data, string hmac)
+        /// <param name="data">Data to verify</param>
+        /// <param name="hmac">Received HMAC signature</param>
+        /// <param name="requestId">Request ID for binding (NEW parameter)</param>
+        /// <returns>True if HMAC is valid, false otherwise</returns>
+        public static bool VerifyHMAC(string data, string hmac, string requestId)
         {
+            // Combine data + request_id for HMAC calculation
+            string combined = data + requestId;
+            
             using (HMACSHA256 h = new HMACSHA256(Encoding.UTF8.GetBytes(API_SECRET)))
             {
-                // Compute HMAC of the data
-                string computed = BitConverter.ToString(h.ComputeHash(Encoding.UTF8.GetBytes(data)))
+                // Compute HMAC of the combined data
+                string computed = BitConverter.ToString(h.ComputeHash(Encoding.UTF8.GetBytes(combined)))
                                              .Replace("-", "").ToLower();
                 
                 // Compare computed HMAC with received HMAC
@@ -227,21 +282,30 @@ namespace Example
             }
         }
 
+        // ========================================================================
+        // AUTHENTICATION FUNCTIONS (WITH REPLAY ATTACK PROTECTION)
+        // ========================================================================
+
         /// <summary>
-        /// Authenticates using a license key
+        /// Authenticates using a license key with replay attack protection
         /// Validates the license and binds it to the current hardware
         /// </summary>
         public static JObject AuthLicense(string licenseKey, string hwid)
         {
             try
             {
-                // Prepare authentication parameters
+                // ✅ Generate unique request ID
+                string requestId = GenerateRequestId();
+                
+                // ✅ Prepare authentication parameters with request_id and timestamp
                 var parameters = new Dictionary<string, string>
                 {
                     { "api_secret", API_SECRET },
                     { "type", "license" },
                     { "key", licenseKey },
-                    { "hwid", hwid }
+                    { "hwid", hwid },
+                    { "request_id", requestId },  // NEW
+                    { "timestamp", DateTimeOffset.Now.ToUnixTimeSeconds().ToString() }  // NEW
                 };
 
                 // Encrypt the payload for secure transmission
@@ -259,21 +323,36 @@ namespace Example
 
                     // Parse the JSON response
                     JObject json = JObject.Parse(response);
+                    
+                    // Validate response structure
+                    if (json["data"] == null || json["hmac"] == null || json["timestamp"] == null)
+                    {
+                        throw new Exception("Invalid response structure");
+                    }
+                    
                     string encData = json["data"].Value<string>();
                     string receivedHmac = json["hmac"].Value<string>();
                     long timestamp = json["timestamp"].Value<long>();
 
-                    // Verify timestamp (must be within 5 minutes to prevent replay attacks)
-                    if (Math.Abs(DateTimeOffset.Now.ToUnixTimeSeconds() - timestamp) > 300)
-                        throw new Exception("Expired");
+                    // ✅ Verify timestamp (stricter: 2 minutes tolerance)
+                    if (Math.Abs(DateTimeOffset.Now.ToUnixTimeSeconds() - timestamp) > 120)
+                        throw new Exception("Response expired");
 
-                    // Verify HMAC signature to ensure data integrity
-                    if (!VerifyHMAC(encData, receivedHmac))
-                        throw new Exception("HMAC failed");
+                    // ✅ Verify HMAC signature with request_id binding
+                    if (!VerifyHMAC(encData, receivedHmac, requestId))
+                        throw new Exception("HMAC verification failed - possible replay attack");
 
-                    // Decrypt and return the response data
+                    // Decrypt the response data
                     string decrypted = DecryptPayload(encData);
-                    return JObject.Parse(decrypted);
+                    JObject result = JObject.Parse(decrypted);
+                    
+                    // ✅ Verify request_id in response matches our request
+                    if (result["request_id"] != null && result["request_id"].Value<string>() != requestId)
+                    {
+                        throw new Exception("Request ID mismatch - possible replay attack");
+                    }
+                    
+                    return result;
                 }
             }
             catch (Exception ex)
@@ -284,21 +363,26 @@ namespace Example
         }
 
         /// <summary>
-        /// Authenticates using username and password
+        /// Authenticates using username and password with replay attack protection
         /// Validates user credentials and binds the session to hardware
         /// </summary>
         public static JObject AuthUser(string username, string password, string hwid)
         {
             try
             {
-                // Prepare authentication parameters
+                // ✅ Generate unique request ID
+                string requestId = GenerateRequestId();
+                
+                // ✅ Prepare authentication parameters with request_id and timestamp
                 var parameters = new Dictionary<string, string>
                 {
                     { "api_secret", API_SECRET },
                     { "type", "user" },
                     { "key", username },
                     { "password", password },
-                    { "hwid", hwid }
+                    { "hwid", hwid },
+                    { "request_id", requestId },  // NEW
+                    { "timestamp", DateTimeOffset.Now.ToUnixTimeSeconds().ToString() }  // NEW
                 };
 
                 // Encrypt the payload for secure transmission
@@ -316,21 +400,36 @@ namespace Example
 
                     // Parse the JSON response
                     JObject json = JObject.Parse(response);
+                    
+                    // Validate response structure
+                    if (json["data"] == null || json["hmac"] == null || json["timestamp"] == null)
+                    {
+                        throw new Exception("Invalid response structure");
+                    }
+                    
                     string encData = json["data"].Value<string>();
                     string receivedHmac = json["hmac"].Value<string>();
                     long timestamp = json["timestamp"].Value<long>();
 
-                    // Verify timestamp (must be within 5 minutes to prevent replay attacks)
-                    if (Math.Abs(DateTimeOffset.Now.ToUnixTimeSeconds() - timestamp) > 300)
-                        throw new Exception("Expired");
+                    // ✅ Verify timestamp (stricter: 2 minutes tolerance)
+                    if (Math.Abs(DateTimeOffset.Now.ToUnixTimeSeconds() - timestamp) > 120)
+                        throw new Exception("Response expired");
 
-                    // Verify HMAC signature to ensure data integrity
-                    if (!VerifyHMAC(encData, receivedHmac))
-                        throw new Exception("HMAC failed");
+                    // ✅ Verify HMAC signature with request_id binding
+                    if (!VerifyHMAC(encData, receivedHmac, requestId))
+                        throw new Exception("HMAC verification failed - possible replay attack");
 
-                    // Decrypt and return the response data
+                    // Decrypt the response data
                     string decrypted = DecryptPayload(encData);
-                    return JObject.Parse(decrypted);
+                    JObject result = JObject.Parse(decrypted);
+                    
+                    // ✅ Verify request_id in response matches our request
+                    if (result["request_id"] != null && result["request_id"].Value<string>() != requestId)
+                    {
+                        throw new Exception("Request ID mismatch - possible replay attack");
+                    }
+                    
+                    return result;
                 }
             }
             catch (Exception ex)

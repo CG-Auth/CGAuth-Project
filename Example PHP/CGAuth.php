@@ -3,6 +3,7 @@
 /**
  * CGAuth Class - License Authentication System
  * Handles license key and user authentication with hardware ID binding
+ * Now includes Replay Attack Protection
  */
 class CGAuth {
     // ========================================================================
@@ -23,6 +24,26 @@ class CGAuth {
     
     /** @var string Expected SSL certificate hash for certificate pinning */
     const SSL_KEY = "WRITE_YOUR_SSL_KEY";
+
+    // ========================================================================
+    // REQUEST ID GENERATION (NEW)
+    // ========================================================================
+    
+    /**
+     * Generate unique request ID for each authentication attempt
+     * Prevents replay attacks by ensuring each request is unique
+     * 
+     * @return string SHA256 hash of timestamp + random bytes
+     */
+    public static function generateRequestId() {
+        // Combine timestamp + random bytes for uniqueness
+        $timestamp = (string)(microtime(true) * 1000);  // Milliseconds
+        $randomBytes = bin2hex(random_bytes(16));
+        
+        // Hash for consistent length
+        $combined = $timestamp . $randomBytes;
+        return strtolower(hash('sha256', $combined));
+    }
 
     // ========================================================================
     // HWID GENERATION (Web Compatible)
@@ -179,31 +200,35 @@ class CGAuth {
     }
 
     // ========================================================================
-    // HMAC VERIFICATION (DATA INTEGRITY)
+    // HMAC VERIFICATION (UPDATED WITH REQUEST BINDING)
     // ========================================================================
     
     /**
-     * Verify HMAC-SHA256 signature to ensure data integrity
-     * Prevents tampering with response data
+     * Verify HMAC-SHA256 signature with request binding to ensure data integrity
+     * Prevents tampering and replay attacks
      * 
      * @param string $data Data to verify
      * @param string $receivedHmac Received HMAC signature
+     * @param string $requestId Request ID for binding
      * @return bool True if HMAC is valid, false otherwise
      */
-    public static function verifyHMAC($data, $receivedHmac) {
-        // Compute HMAC-SHA256 of the data
-        $computed = hash_hmac('sha256', $data, self::API_SECRET);
+    public static function verifyHMAC($data, $receivedHmac, $requestId) {
+        // Combine data + request_id for HMAC calculation
+        $combined = $data . $requestId;
+        
+        // Compute HMAC-SHA256 of the combined data
+        $computed = hash_hmac('sha256', $combined, self::API_SECRET);
         
         // Compare computed HMAC with received HMAC (case-insensitive)
         return strtolower($computed) === strtolower($receivedHmac);
     }
 
     // ========================================================================
-    // AUTHENTICATION FUNCTIONS
+    // AUTHENTICATION FUNCTIONS (WITH REPLAY ATTACK PROTECTION)
     // ========================================================================
     
     /**
-     * Authenticate using a license key
+     * Authenticate using a license key with replay attack protection
      * 
      * @param string $licenseKey License key to validate
      * @param string $hwid Hardware ID of the machine
@@ -211,12 +236,17 @@ class CGAuth {
      */
     public static function authLicense($licenseKey, $hwid) {
         try {
-            // Prepare authentication parameters
+            // ✅ Generate unique request ID
+            $requestId = self::generateRequestId();
+            
+            // ✅ Prepare authentication parameters with request_id and timestamp
             $params = [
                 'api_secret' => self::API_SECRET,
                 'type' => 'license',
                 'key' => $licenseKey,
-                'hwid' => $hwid
+                'hwid' => $hwid,
+                'request_id' => $requestId,  // NEW
+                'timestamp' => (string)time()  // NEW
             ];
             
             // Encrypt the payload for secure transmission
@@ -261,24 +291,36 @@ class CGAuth {
                 throw new Exception("Invalid JSON response");
             }
             
+            // Validate response structure
+            if (!isset($jsonResponse['data']) || !isset($jsonResponse['hmac']) || !isset($jsonResponse['timestamp'])) {
+                throw new Exception("Invalid response structure");
+            }
+            
             // Extract response components
             $encData = $jsonResponse['data'];
             $receivedHmac = $jsonResponse['hmac'];
             $timestamp = $jsonResponse['timestamp'];
             
-            // Verify timestamp to prevent replay attacks (5 minutes tolerance)
-            if (abs(time() - $timestamp) > 300) {
+            // ✅ Verify timestamp (stricter: 2 minutes tolerance)
+            if (abs(time() - $timestamp) > 120) {
                 throw new Exception("Response expired");
             }
             
-            // Verify HMAC to ensure data integrity
-            if (!self::verifyHMAC($encData, $receivedHmac)) {
-                throw new Exception("HMAC verification failed");
+            // ✅ Verify HMAC with request_id binding
+            if (!self::verifyHMAC($encData, $receivedHmac, $requestId)) {
+                throw new Exception("HMAC verification failed - possible replay attack");
             }
             
             // Decrypt the response data
             $decrypted = self::decryptPayload($encData);
-            return json_decode($decrypted, true);
+            $result = json_decode($decrypted, true);
+            
+            // ✅ Verify request_id in response matches our request
+            if (isset($result['request_id']) && $result['request_id'] !== $requestId) {
+                throw new Exception("Request ID mismatch - possible replay attack");
+            }
+            
+            return $result;
             
         } catch (Exception $e) {
             // Return error response if authentication fails
@@ -290,7 +332,7 @@ class CGAuth {
     }
     
     /**
-     * Authenticate using username and password
+     * Authenticate using username and password with replay attack protection
      * 
      * @param string $username User's username
      * @param string $password User's password
@@ -299,13 +341,18 @@ class CGAuth {
      */
     public static function authUser($username, $password, $hwid) {
         try {
-            // Prepare authentication parameters
+            // ✅ Generate unique request ID
+            $requestId = self::generateRequestId();
+            
+            // ✅ Prepare authentication parameters with request_id and timestamp
             $params = [
                 'api_secret' => self::API_SECRET,
                 'type' => 'user',
                 'key' => $username,
                 'password' => $password,
-                'hwid' => $hwid
+                'hwid' => $hwid,
+                'request_id' => $requestId,  // NEW
+                'timestamp' => (string)time()  // NEW
             ];
             
             // Encrypt the payload for secure transmission
@@ -350,24 +397,36 @@ class CGAuth {
                 throw new Exception("Invalid JSON response");
             }
             
+            // Validate response structure
+            if (!isset($jsonResponse['data']) || !isset($jsonResponse['hmac']) || !isset($jsonResponse['timestamp'])) {
+                throw new Exception("Invalid response structure");
+            }
+            
             // Extract response components
             $encData = $jsonResponse['data'];
             $receivedHmac = $jsonResponse['hmac'];
             $timestamp = $jsonResponse['timestamp'];
             
-            // Verify timestamp to prevent replay attacks (5 minutes tolerance)
-            if (abs(time() - $timestamp) > 300) {
+            // ✅ Verify timestamp (stricter: 2 minutes tolerance)
+            if (abs(time() - $timestamp) > 120) {
                 throw new Exception("Response expired");
             }
             
-            // Verify HMAC to ensure data integrity
-            if (!self::verifyHMAC($encData, $receivedHmac)) {
-                throw new Exception("HMAC verification failed");
+            // ✅ Verify HMAC with request_id binding
+            if (!self::verifyHMAC($encData, $receivedHmac, $requestId)) {
+                throw new Exception("HMAC verification failed - possible replay attack");
             }
             
             // Decrypt the response data
             $decrypted = self::decryptPayload($encData);
-            return json_decode($decrypted, true);
+            $result = json_decode($decrypted, true);
+            
+            // ✅ Verify request_id in response matches our request
+            if (isset($result['request_id']) && $result['request_id'] !== $requestId) {
+                throw new Exception("Request ID mismatch - possible replay attack");
+            }
+            
+            return $result;
             
         } catch (Exception $e) {
             // Return error response if authentication fails
