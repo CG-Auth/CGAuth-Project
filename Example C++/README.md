@@ -1,5 +1,9 @@
 # CGAuth License Verification System (C++)
 
+- ⚠️ 13.10.2025 nlohmann.json nuget packages added.
+- ⚠️ For the project to run smoothly, you must build in "Release" and "x64" mode.
+- ⚠️ Also, please do not forget to complete the vcpkg installations.
+
 A high-security **license and authentication system** for C++ desktop applications.  
 This module connects to the [CGAuth](https://cgauth.com) API to verify **license keys** or **user credentials**, providing AES encryption, HMAC verification, and SSL certificate pinning for maximum security.
 

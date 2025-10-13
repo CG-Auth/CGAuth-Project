@@ -15,16 +15,16 @@
 const std::string CGAuth::API_URL = "https://cgauth.com/api/v1/";
 
 /** Your application name - must match license configuration */
-const std::string CGAuth::YOUR_APP_NAME = "WRITE_YOUR_APP_NAME";
+const std::string CGAuth::YOUR_APP_NAME = "PUBG";
 
 /** API Key - public identifier for your application */
-std::string CGAuth::API_KEY = "WRITE_YOUR_API_KEY";
+std::string CGAuth::API_KEY = "7a311cc779bd2500bfc29e7e3fd90027d2eb96d7225fe8932e0543ef7b23af01";
 
 /** API Secret - used for encryption and HMAC (keep private!) */
-std::string CGAuth::API_SECRET = "WRITE_YOUR_API_SECRET";
+std::string CGAuth::API_SECRET = "da14cd6591ce136dae7407e2087dca97a70eebf5fc3b4f2b2e8f779f2bf20b13";
 
 /** SSL certificate hash for certificate pinning (prevents MITM attacks) */
-const std::string CGAuth::SSL_KEY = "WRITE_YOUR_SSL_KEY";
+const std::string CGAuth::SSL_KEY = "95d4c3c7492bafb97174b22cce94ca30628e56d87b82f6df3ba910ccf4c90b92";
 
 // ============================================================================
 // BASE64 HELPER FUNCTIONS
