@@ -24,7 +24,7 @@ std::string CGAuth::API_KEY = "7a311cc779bd2500bfc29e7e3fd90027d2eb96d7225fe8932
 std::string CGAuth::API_SECRET = "da14cd6591ce136dae7407e2087dca97a70eebf5fc3b4f2b2e8f779f2bf20b13";
 
 /** SSL certificate hash for certificate pinning (prevents MITM attacks) */
-const std::string CGAuth::SSL_KEY = "95d4c3c7492bafb97174b22cce94ca30628e56d87b82f6df3ba910ccf4c90b92";
+const std::string CGAuth::SSL_KEY = "c43c660c3fc787c858e5df98743f607b88471689bf215fe197c5e7a40fea58ca";
 
 // ============================================================================
 // BASE64 HELPER FUNCTIONS
